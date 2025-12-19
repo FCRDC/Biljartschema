@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Match Scheduler</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+body{margin:0;padding:16px;background:#f4f6f8;color:#222}
+.container{max-width:1000px;margin:auto;background:#fff;border-radius:12px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,.08)}
+h1{font-size:20px;margin:0 0 6px}
+h3{margin:0 0 8px}
+.small{font-size:13px;color:#666}
+.flex{display:flex;gap:12px}
+.col{flex:1}
+.card{background:#fafafa;border-radius:10px;padding:12px;margin-top:12px}
+.players{max-height:300px;overflow:auto;border:1px dashed #ddd;border-radius:8px;padding:6px}
+.player{display:flex;justify-content:space-between;align-items:center;padding:6px;border-bottom:1px solid #eee;gap:6px}
+.player:last-child{border-bottom:none}
+button{padding:8px 12px;border-radius:8px;border:none;background:#0b74de;color:#fff;font-weight:600;cursor:pointer}
+button.ghost{background:#fff;color:#0b74de;border:1px solid #dbeafc}
+button.danger{background:#d33}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px;border-bottom:1px solid #eaeaea;text-align:left}
+input[type=text],select,input[type=date]{padding:6px;border-radius:6px;border:1px solid #ccc}
+.actions{display:flex;gap:6px;flex-wrap:wrap}
+@media(max-width:700px){.flex{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Match Scheduler</h1>
+<p class="small">Lokaal – zonder server – geen herhalingen toegestaan</p>
+
+<div class="flex">
+  <div class="col">
+    <h3>Spelers</h3>
+    <div class="actions" style="margin-bottom:6px">
+      <input id="newPlayer" placeholder="Naam speler">
+      <button onclick="addPlayer()">Toevoegen</button>
+      <button class="ghost" onclick="exportPlayers()">Export CSV</button>
+      <button class="ghost" onclick="importPlayers()">Import CSV</button>
+    </div>
+    <div id="playersList" class="players"></div>
+  </div>
+
+  <div class="col">
+    <h3>Ronde</h3>
+    <button onclick="generateRound()">Genereer ronde</button>
+    <button class="ghost" onclick="clearRound()">Wis ronde</button>
+    <div id="roundInfo" class="small" style="margin-top:6px"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Huidige ronde</h3>
+  <div id="roundArea" class="small">Nog geen ronde.</div>
+</div>
+
+<div class="card">
+  <h3>Handmatige wedstrijd toevoegen</h3>
+  <div class="actions">
+    <select id="mP1"></select>
+    <select id="mP2"></select>
+    <input id="mScore" placeholder="Uitslag (bv. 2-1)">
+    <input id="mDate" type="date">
+    <button onclick="addManualMatch()">Toevoegen</button>
+  </div>
+  <div id="manualMsg" class="small"></div>
+</div>
+
+<div class="card">
+  <h3>Wedstrijdgeschiedenis</h3>
+  <div id="historyArea" class="small">Leeg.</div>
+  <div class="actions" style="margin-top:6px">
+    <button class="ghost" onclick="importHistory()">Import historie (CSV)</button>
+    <button class="danger" onclick="clearAllHistory()">Wis volledige historie (nieuw seizoen)</button>
+  </div>
+</div>
+  <div class="actions" style="margin-top:6px">
+    <button class="danger" onclick="clearAllHistory()">Wis volledige historie (nieuw seizoen)</button>
+  </div>
+</div>
+</div>
+
+<input type="file" id="fileInput" accept="text/csv" style="display:none">
+</div>
+
+<script>
+const KEY_PLAYERS='ms_players_final';
+const KEY_HISTORY='ms_history_final';
+let currentRound=[];
+
+/* ---------- Players ---------- */
+function loadPlayers(){
+  return JSON.parse(localStorage.getItem(KEY_PLAYERS)||'[]');
+}
+function savePlayers(p){localStorage.setItem(KEY_PLAYERS,JSON.stringify(p));renderPlayers();updateManualSelects();}
+function addPlayer(){
+  const n=newPlayer.value.trim(); if(!n) return;
+  const p=loadPlayers(); if(p.some(x=>x.name===n)) return alert('Speler bestaat al');
+  p.push({name:n,status:'Aanwezig'}); savePlayers(p); newPlayer.value='';
+}
+function renderPlayers(){
+  const list=playersList; list.innerHTML='';
+  loadPlayers().forEach((p,i)=>{
+    const d=document.createElement('div'); d.className='player';
+    d.innerHTML=`<strong>${p.name}</strong>`;
+    const sel=document.createElement('select');
+    sel.innerHTML='<option>Aanwezig</option><option>Afwezig</option>';
+    sel.value=p.status; sel.onchange=()=>{p.status=sel.value;savePlayers(loadPlayers())};
+    const del=document.createElement('button'); del.textContent='✖'; del.className='danger';
+    del.onclick=()=>{if(confirm('Speler verwijderen?')){const a=loadPlayers();a.splice(i,1);savePlayers(a);}};
+    d.append(sel,del); list.appendChild(d);
+  });
+}
+function exportPlayers(){
+  const csv=loadPlayers().map(p=>`"${p.name}","${p.status}"`).join('\n'); download(csv,'players.csv');
+}
+function importPlayers(){
+  fileInput.onchange=e=>{
+    const r=new FileReader(); r.onload=ev=>{
+      const p=ev.target.result.split(/\r?\n/).filter(Boolean).map(r=>{
+        const [n,s]=r.replace(/"/g,'').split(','); return {name:n,status:s||'Aanwezig'};
+      }); savePlayers(p);
+    }; r.readAsText(e.target.files[0]);
+  }; fileInput.click();
+}
+
+/* ---------- History ---------- */
+function importHistory(){
+  fileInput.onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      const rows=ev.target.result.split(/?
+/).filter(Boolean);
+      const h=[];
+      for(const row of rows){
+        const parts=row.replace(/"/g,'').split(',');
+        if(parts.length<4) continue;
+        const [date,p1,p2,score]=parts;
+        h.push({date,p1,p2,score});
+      }
+      saveHistory(h);
+      alert('Historie geïmporteerd');
+    };
+    r.readAsText(f);
+  };
+  fileInput.click();
+}
+
+function loadHistory(){return JSON.parse(localStorage.getItem(KEY_HISTORY)||'[]');}
+function saveHistory(h){localStorage.setItem(KEY_HISTORY,JSON.stringify(h));renderHistory();}
+function pairKey(a,b){return [a,b].sort().join('|');}
+
+/* ---------- Round ---------- */
+function generateRound(){
+  const players=loadPlayers().filter(p=>p.status==='Aanwezig').map(p=>p.name);
+  const histKeys=new Set(loadHistory().map(h=>pairKey(h.p1,h.p2)));
+  let pairs=[];
+  for(let i=0;i<players.length;i++)
+    for(let j=i+1;j<players.length;j++){
+      const k=pairKey(players[i],players[j]);
+      if(!histKeys.has(k)) pairs.push([players[i],players[j]]);
+    }
+  if(!pairs.length){alert('Geen nieuwe wedstrijden mogelijk');return;}
+  pairs.sort(()=>Math.random()-.5);
+  const used=new Set(); currentRound=[];
+  for(const [a,b] of pairs){ if(!used.has(a)&&!used.has(b)){ currentRound.push({p1:a,p2:b}); used.add(a); used.add(b);} }
+  const notUsed=players.filter(p=>!used.has(p));
+  roundInfo.innerHTML=notUsed.length?`Niet ingedeeld: <strong>${notUsed.join(', ')}</strong>`:'';
+  renderRound();
+}
+function renderRound(){
+  if(!currentRound.length){roundArea.innerHTML='Geen ronde.';return;}
+  let h='<table><tr><th>Speler 1</th><th>Speler 2</th><th>Uitslag</th></tr>';
+  currentRound.forEach((m,i)=>{
+    h+=`<tr><td>${m.p1}</td><td>${m.p2}</td><td><input id="r${i}" placeholder="2-1"></td></tr>`;
+  });
+  h+='</table><button class="ghost" onclick="saveRound()">Opslaan ronde</button>';
+  roundArea.innerHTML=h;
+}
+function saveRound(){
+  const h=loadHistory();
+  currentRound.forEach((m,i)=>{
+    const v=document.getElementById('r'+i).value.trim();
+    if(v) h.push({p1:m.p1,p2:m.p2,score:v,date:new Date().toISOString().slice(0,10)});
+  }); saveHistory(h); clearRound();
+}
+function clearRound(){currentRound=[];roundArea.innerHTML='Geen ronde.';roundInfo.innerHTML='';}
+
+/* ---------- Manual match ---------- */
+function updateManualSelects(){
+  const p=loadPlayers().map(x=>x.name);
+  [mP1,mP2].forEach(sel=>{sel.innerHTML='<option></option>'+p.map(n=>`<option>${n}</option>`).join('');});
+  mDate.value=new Date().toISOString().slice(0,10);
+}
+function addManualMatch(){
+  const a=mP1.value,b=mP2.value,sc=mScore.value.trim(),d=mDate.value;
+  if(!a||!b||a===b||!sc)return;
+  const h=loadHistory(); const k=pairKey(a,b);
+  if(h.some(x=>pairKey(x.p1,x.p2)===k)){manualMsg.textContent='Deze wedstrijd bestaat al';return;}
+  h.push({p1:a,p2:b,score:sc,date:d}); saveHistory(h);
+  manualMsg.textContent='Wedstrijd toegevoegd'; mScore.value='';
+}
+
+/* ---------- History render/edit ---------- */
+function renderHistory(){
+  const h=loadHistory(); if(!h.length){historyArea.innerHTML='Geen wedstrijden.';return;}
+  let t='<table><tr><th>Datum</th><th>Wedstrijd</th><th>Uitslag</th><th></th></tr>';
+  h.forEach((m,i)=>{
+    t+=`<tr>
+      <td><input type="date" value="${m.date}" onchange="editMatch(${i},'date',this.value)"></td>
+      <td>${m.p1} – ${m.p2}</td>
+      <td><input value="${m.score}" onchange="editMatch(${i},'score',this.value)"></td>
+      <td><button class="danger" onclick="deleteMatch(${i})">✖</button></td>
+    </tr>`;
+  }); t+='</table>'; historyArea.innerHTML=t;
+}
+function editMatch(i,f,v){const h=loadHistory();h[i][f]=v;saveHistory(h);} 
+function deleteMatch(i){if(confirm('Wedstrijd verwijderen?')){const h=loadHistory();h.splice(i,1);saveHistory(h);}}
+
+function clearAllHistory(){
+  if(confirm('Weet je zeker dat je ALLE wedstrijden wilt wissen? Dit kan niet ongedaan worden gemaakt.')){
+    localStorage.removeItem(KEY_HISTORY);
+    renderHistory();
+    alert('Historie gewist. Nieuw seizoen gestart.');
+  }
+}
+
+/* ---------- Utils ---------- */
+function download(t,n){const b=new Blob([t]);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=n;a.click();}
+
+renderPlayers(); updateManualSelects(); renderHistory();
+</script>
+</body>
+</html>
